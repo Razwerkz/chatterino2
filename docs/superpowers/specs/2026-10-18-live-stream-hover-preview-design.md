@@ -20,8 +20,8 @@ Everything in this document exists to serve that moment. Anything that adds comp
 2. After the user **dwells ~300 ms**, and only if the feature is enabled, Streamer Mode is off, and streamlink is resolvable, a live preview starts loading in the background.
 3. When the **first video frame** is ready, the popup swaps the thumbnail area for the video — the title/category/uptime text stays, and the popup keeps its exact footprint (same size as the thumbnail; no resize or reposition). No second window is ever opened.
 4. Until video is ready — and permanently, if the stream never loads (offline, error, streamlink missing, resolution timeout) — the popup looks exactly like today's tooltip. It never shows a black rectangle or an error dialog.
-5. The preview is **muted by default**. A setting ("Stream preview audio", default off) can be enabled; flipping it applies **live** to a currently visible preview.
-6. Cursor leaves the header → the popup hides and the preview stops (player stopped, streamlink process killed). No background downloading.
+5. The preview is **muted by default**. A setting ("Stream preview audio", default off) can be enabled; flipping it applies **live** to a currently visible preview. Audio is only ever audible while the preview is visible (§2.6).
+6. Cursor leaves the header → the popup hides and the preview stops (player stopped, streamlink process killed). **Audio stops the instant the popup hides — audio only ever plays while the preview is visible.** No background downloading.
 7. The popup is mouse-transparent: clicks, scrolls, drags, and clicks on the header all pass through exactly as today.
 8. **With the feature off (default), behavior is indistinguishable from current behavior.**
 9. Preview size follows the existing "Show thumbnails of streams" setting — Small (80×45), Medium (160×90), Large (360×203) — so the popup never changes size when the video arrives. If thumbnails are Off, the preview falls back to Medium (agent call); stage 1 is then the text-only tooltip, and the video still swaps in when ready.
@@ -37,6 +37,7 @@ Everything in this document exists to serve that moment. Anything that adds comp
 | Audio control lives in **Settings**, not in the preview | User | Consequence of tooltip being mouse-transparent |
 | Audio default: muted | User | "muted by default" from the original ask |
 | Audio setting applies live; no volume slider in v1 | Agent call, no objection | Volume later if missed |
+| Audio must not persist once the popup hides | User | Audio only while visible; every stop path cuts it |
 | Video replaces the thumbnail area only; title/category/uptime text stays | Agent call (builder-check) | Matches "instead of a still thumbnail" |
 | Preview size = thumbnail-size setting; Off → Medium fallback | User preference + agent call | One footprint; popup never resizes |
 | Reruns preview like live streams | User | "A rerun is just a fancy livestream" |
@@ -101,6 +102,7 @@ An **interactive preview** (click to pin, then buttons work) is a possible later
 
 - `QAudioOutput` attached to the player; muted by default.
 - Driven by the "Stream preview audio" setting; live-applied via the settings signal (flip setting while previewing → immediate mute/unmute).
+- **Audio only while visible:** unmute only once stage 2 (video visible) is reached — never during load or on the thumbnail stage. Every hide/stop path cuts audio immediately (`player.stop()`, not just `setMuted`): leave event, channel/split change, feature toggled off, Streamer Mode, app quit. No teardown tail.
 
 ### 5.6 Settings
 
@@ -135,6 +137,7 @@ An **interactive preview** (click to pin, then buttons work) is a possible later
 
 - Any preview or in-flight resolution while Streamer Mode is enabled.
 - Audio ever playing when the audio setting is off.
+- Audio audible (or starting) when the preview is not visible — including teardown tails.
 - Orphaned streamlink processes, or any downloading after the cursor leaves.
 - Noticeable lag or CPU use for quick mouse passes; any regression when the feature is off.
 - Interfering with header click/drag/scroll behavior (mouse-transparency must hold).
@@ -154,6 +157,7 @@ An **interactive preview** (click to pin, then buttons work) is a possible later
 - **Off-state identity:** feature off → tooltips identical to today across channel types.
 - **Live hover:** instant thumbnail; video swaps after dwell; muted by default; live audio toggle works.
 - **Negatives:** streamlink missing; offline channel; quick pass-through hover (no process); hover away mid-load (no process left: `pgrep streamlink`); split/channel switch mid-preview; app quit.
+- **Audio-visibility:** with audio enabled, leaving the header cuts audio instantly (listen for a tail); Streamer Mode mid-preview cuts audio; never audible without visible video.
 - **Wayland sanity:** popup position/stacking, no focus stealing, clicks pass through.
 - **Edges:** reruns preview like live streams; Streamer Mode suppresses start and stops running previews; `AudioOnly` preference resolves video (High mapping); thumbnails-Off falls back to Medium.
 - **Perf:** CPU while previewing vs idle; unchanged app startup.
