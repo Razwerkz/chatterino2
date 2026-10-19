@@ -16,15 +16,15 @@ Everything in this document exists to serve that moment. Anything that adds comp
 
 ## 2. User-facing behavior (the spec)
 
-1. Hover a live channel's split header → the existing hover popup appears **immediately** with today's content (stream title, category, uptime, thumbnail if enabled).
-2. After the user **dwells ~300 ms**, and only if the feature is enabled and streamlink is resolvable, a live preview starts loading in the background.
-3. When the **first video frame** is ready, the popup swaps the thumbnail area for the video — the title/category/uptime text stays. The popup grows to the fixed preview size (§5.2) and re-runs its on-screen bounds check. No second window is ever opened.
+1. Hover the split header of a live stream (or a rerun) → the existing hover popup appears **immediately** with today's content (stream title, category, uptime, thumbnail if enabled).
+2. After the user **dwells ~300 ms**, and only if the feature is enabled, Streamer Mode is off, and streamlink is resolvable, a live preview starts loading in the background.
+3. When the **first video frame** is ready, the popup swaps the thumbnail area for the video — the title/category/uptime text stays, and the popup keeps its exact footprint (same size as the thumbnail; no resize or reposition). No second window is ever opened.
 4. Until video is ready — and permanently, if the stream never loads (offline, error, streamlink missing, resolution timeout) — the popup looks exactly like today's tooltip. It never shows a black rectangle or an error dialog.
 5. The preview is **muted by default**. A setting ("Stream preview audio", default off) can be enabled; flipping it applies **live** to a currently visible preview.
 6. Cursor leaves the header → the popup hides and the preview stops (player stopped, streamlink process killed). No background downloading.
 7. The popup is mouse-transparent: clicks, scrolls, drags, and clicks on the header all pass through exactly as today.
 8. **With the feature off (default), behavior is indistinguishable from current behavior.**
-9. Interaction with the existing "Show thumbnails of streams" setting: independent. If thumbnails are off, stage 1 of the popup is the text-only version of today's tooltip, and the video appears above the text as usual when ready.
+9. Preview size follows the existing "Show thumbnails of streams" setting — Small (80×45), Medium (160×90), Large (360×203) — so the popup never changes size when the video arrives. If thumbnails are Off, the preview falls back to Medium (agent call); stage 1 is then the text-only tooltip, and the video still swaps in when ready.
 
 ## 3. Decisions already made
 
@@ -38,7 +38,9 @@ Everything in this document exists to serve that moment. Anything that adds comp
 | Audio default: muted | User | "muted by default" from the original ask |
 | Audio setting applies live; no volume slider in v1 | Agent call, no objection | Volume later if missed |
 | Video replaces the thumbnail area only; title/category/uptime text stays | Agent call (builder-check) | Matches "instead of a still thumbnail" |
-| Preview video size fixed 480×270 in v1 | Agent call (builder-check) | Independent of thumbnail-size setting; setting later if wanted |
+| Preview size = thumbnail-size setting; Off → Medium fallback | User preference + agent call | One footprint; popup never resizes |
+| Reruns preview like live streams | User | "A rerun is just a fancy livestream" |
+| Suppressed entirely while Streamer Mode is on | User | Stops immediately if enabled mid-preview |
 | `AudioOnly` quality preference → preview uses High mapping | Agent call (builder-check) | Preview must never resolve audio-only |
 | Player starts only after ~300 ms dwell | Agent call, no objection | Quick mouse passes stay today-identical |
 | Graceful silent degradation (no streamlink → tooltip as today) | Agent call, no objection | No error popups |
@@ -62,10 +64,11 @@ An **interactive preview** (click to pin, then buttons work) is a possible later
 ### 5.1 Trigger and lifecycle
 
 - Hook: `SplitHeader::enterEvent` / `leaveEvent` (`SplitHeader.cpp:1147`, `:1180`), where the tooltip is shown/hidden today.
-- When the feature is **on** and the channel is **live** and streamlink is resolvable: show the preview popup instead of `TooltipWidget`, reusing its position math. Otherwise: unchanged code path.
+- When the feature is **on**, the channel is **online (live or rerun)**, Streamer Mode is off, and streamlink is resolvable: show the preview popup instead of `TooltipWidget`, reusing its position math. Otherwise: unchanged code path.
 - Single active preview app-wide (only one cursor). Cancelable start: dwell (`QTimer` ~300 ms) → resolve → play. Leaving or moving off before the dwell timer fires cancels everything (no process ever spawned).
 - **Hard stops that must kill streamlink + player:** leave event; split/channel change while shown; feature toggled off; window closed; app quit. Orphaned processes are an anti-goal (§7).
-- Reruns must be excluded explicitly: Twitch reports reruns with `live == true`, so require `!rerun` from the stream status (`TwitchChannel::StreamStatus`).
+- Reruns are included by design: do not gate on `rerun` (Twitch reports reruns with `live == true`); `TwitchChannel` itself notes "a rerun is just a fancy livestream" (`TwitchChannel.cpp:1442`) and streamlink resolves them identically.
+- Streamer Mode watch: never start while enabled; connect `IStreamerMode::changed(bool)` (`src/singletons/StreamerMode.hpp:36`) to stop a running preview immediately.
 - Repeated hovers on the same header: v1 accepts a full restart (~seconds). Keep-alive/caching is a later optimization if annoying in daily use.
 
 ### 5.2 Preview popup widget
@@ -74,7 +77,7 @@ An **interactive preview** (click to pin, then buttons work) is a possible later
 - Copies the TooltipWidget window recipe (§4). Contains:
   - **Stage 1:** the exact rich text of today's tooltip (reuse `tooltipText_` content, incl. base64 thumbnail) in a label styled like `TooltipEntryWidget`.
   - **Stage 2:** the same text minus the thumbnail image, with the video surface where the image was — the video replaces the image area only; the text stays visible.
-- Video size: fixed 16:9, **480×270** in v1 — deliberately independent of the thumbnail-size setting (80/160/360 px wide would make the preview unusably small); a size setting is possible later. When video appears, the popup grows and re-runs its bounds check (`applyLastBoundsCheck`); same popup, same anchor preference.
+- Video size follows the thumbnail-size setting (Small 80×45 / Medium 160×90 / Large 360×203); with thumbnails Off, fall back to Medium. Same footprint as stage 1 → no resize and no bounds re-check when the video arrives.
 - One popup per split header, same ownership pattern as the tooltip.
 
 ### 5.3 Stream sourcing
@@ -121,7 +124,7 @@ An **interactive preview** (click to pin, then buttons work) is a possible later
 ## 6. Non-goals (v1)
 
 - No interactive controls inside the preview (no buttons, no volume, no click actions). Pin-to-interact is a possible later feature.
-- No VODs, clips, or reruns — live channels only.
+- No VODs or clips — live streams and reruns only.
 - No previews in other tooltips/usercards/link previews.
 - No volume slider; no per-channel preview configuration.
 - No plugin-API work of any kind.
@@ -130,6 +133,7 @@ An **interactive preview** (click to pin, then buttons work) is a possible later
 
 ## 7. Anti-goals (would make this a failure even if it "works")
 
+- Any preview or in-flight resolution while Streamer Mode is enabled.
 - Audio ever playing when the audio setting is off.
 - Orphaned streamlink processes, or any downloading after the cursor leaves.
 - Noticeable lag or CPU use for quick mouse passes; any regression when the feature is off.
@@ -151,7 +155,7 @@ An **interactive preview** (click to pin, then buttons work) is a possible later
 - **Live hover:** instant thumbnail; video swaps after dwell; muted by default; live audio toggle works.
 - **Negatives:** streamlink missing; offline channel; quick pass-through hover (no process); hover away mid-load (no process left: `pgrep streamlink`); split/channel switch mid-preview; app quit.
 - **Wayland sanity:** popup position/stacking, no focus stealing, clicks pass through.
-- **Edges:** reruns never preview (explicit `!rerun` check); `AudioOnly` preference resolves video (High mapping).
+- **Edges:** reruns preview like live streams; Streamer Mode suppresses start and stops running previews; `AudioOnly` preference resolves video (High mapping); thumbnails-Off falls back to Medium.
 - **Perf:** CPU while previewing vs idle; unchanged app startup.
 - **Builds:** native Arch build; Flatpak rebuild optional.
 
